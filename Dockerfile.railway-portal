@@ -39,7 +39,8 @@ COPY apps/portal ./apps/portal
 COPY --from=deps /app/node_modules ./node_modules
 
 # Build local packages that require compilation before Next.js build
-RUN cd packages/company && bun run build
+# Skip --dts (type declarations not needed at runtime)
+RUN cd packages/company && bunx tsup src/index.ts --format cjs,esm
 
 RUN cd packages/db && node scripts/combine-schemas.js
 RUN cp packages/db/dist/schema.prisma apps/portal/prisma/schema.prisma
