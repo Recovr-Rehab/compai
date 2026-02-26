@@ -24,6 +24,8 @@
       "@db": ["./prisma"],
       "@comp/email": ["../../packages/email/index.ts"],
       "@comp/email/*": ["../../packages/email/*"],
+      "@comp/company": ["../../packages/company/src/index.ts"],
+      "@comp/company/*": ["../../packages/company/src/*"],
       "@comp/kv": ["../../packages/kv/src/index.ts"],
       "@comp/kv/*": ["../../packages/kv/src/*"],
       "@comp/ui": ["../../packages/ui/src/components/index.ts"],

@@ -96,6 +96,12 @@
       "@comp/ui/tailwind.config": [
         "../../packages/ui/tailwind.config.ts"
       ],
+      "@comp/company": [
+        "../../packages/company/src/index.ts"
+      ],
+      "@comp/company/*": [
+        "../../packages/company/src/*"
+      ],
       "@comp/kv": [
         "../../packages/kv/src/index.ts"
       ],
