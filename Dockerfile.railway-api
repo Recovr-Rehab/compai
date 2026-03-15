@@ -42,10 +42,11 @@ COPY apps/api ./apps/api
 
 COPY --from=deps /app/node_modules ./node_modules
 
-# Combine Prisma schemas and generate client (needed by @comp/auth and API)
+# Combine Prisma schemas and generate client (needed by @comp/auth, @trycompai/db, and API)
 RUN cd packages/db && node scripts/combine-schemas.js
 RUN cp packages/db/dist/schema.prisma apps/api/prisma/schema.prisma
 RUN cd apps/api && bunx prisma generate
+RUN cd packages/db && bunx tsc
 
 # Build local packages that require compilation
 RUN cd packages/auth && bunx tsc -p tsconfig.build.json
