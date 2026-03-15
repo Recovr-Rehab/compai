@@ -42,6 +42,7 @@ COPY --from=deps /app/node_modules ./node_modules
 
 # Build local packages that require compilation before Next.js build
 # Skip --dts (type declarations not needed at runtime)
+RUN cd packages/auth && bunx tsc -p tsconfig.build.json
 RUN cd packages/company && bunx tsup src/index.ts --format cjs,esm
 
 RUN cd packages/db && node scripts/combine-schemas.js
