@@ -1,0 +1,71 @@
+# =============================================================================
+# Railway-specific Dockerfile for the API service (NestJS)
+# Handles authentication, business logic, and all backend endpoints.
+# =============================================================================
+
+# =============================================================================
+# STAGE 1: Dependencies
+# =============================================================================
+FROM oven/bun:1.2.8 AS deps
+
+WORKDIR /app
+
+COPY package.json bun.lock ./
+
+COPY packages/kv/package.json ./packages/kv/
+COPY packages/ui/package.json ./packages/ui/
+COPY packages/email/package.json ./packages/email/
+COPY packages/integration-platform/package.json ./packages/integration-platform/
+COPY packages/integrations/package.json ./packages/integrations/
+COPY packages/utils/package.json ./packages/utils/
+COPY packages/tsconfig/package.json ./packages/tsconfig/
+COPY packages/analytics/package.json ./packages/analytics/
+COPY packages/auth/package.json ./packages/auth/
+COPY packages/company/package.json ./packages/company/
+COPY packages/db/package.json ./packages/db/
+
+COPY apps/app/package.json ./apps/app/
+COPY apps/api/package.json ./apps/api/
+COPY apps/portal/package.json ./apps/portal/
+
+RUN PRISMA_SKIP_POSTINSTALL_GENERATE=true bun install --ignore-scripts
+
+# =============================================================================
+# STAGE 2: API Builder
+# =============================================================================
+FROM deps AS api-builder
+
+WORKDIR /app
+
+COPY packages ./packages
+COPY apps/api ./apps/api
+
+COPY --from=deps /app/node_modules ./node_modules
+
+# Combine Prisma schemas and generate client (needed by @comp/auth and API)
+RUN cd packages/db && node scripts/combine-schemas.js
+RUN cp packages/db/dist/schema.prisma apps/api/prisma/schema.prisma
+RUN cd apps/api && bunx prisma generate
+
+# Build local packages that require compilation
+RUN cd packages/auth && bunx tsc -p tsconfig.build.json
+RUN cd packages/company && bunx tsup src/index.ts --format cjs,esm
+
+# Build the NestJS API
+RUN cd apps/api && bunx nest build
+
+# =============================================================================
+# STAGE 3: API Production (final)
+# =============================================================================
+FROM node:22-alpine AS api
+
+WORKDIR /app
+
+COPY --from=api-builder /app/apps/api/dist ./dist
+COPY --from=api-builder /app/node_modules ./node_modules
+COPY --from=api-builder /app/apps/api/node_modules ./apps/api/node_modules
+COPY --from=api-builder /app/packages ./packages
+
+EXPOSE 3333
+ENV PORT=3333
+CMD ["node", "dist/main.js"]
