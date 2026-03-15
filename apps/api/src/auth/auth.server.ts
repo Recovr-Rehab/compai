@@ -28,6 +28,9 @@ function getCookieDomain(): string | undefined {
   if (baseUrl.includes('trycomp.ai')) {
     return '.trycomp.ai';
   }
+  if (baseUrl.includes('recovr.com')) {
+    return '.recovr.com';
+  }
   return undefined;
 }
 
