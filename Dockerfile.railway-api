@@ -50,6 +50,8 @@ RUN cd apps/api && bunx prisma generate
 # Build local packages that require compilation
 RUN cd packages/auth && bunx tsc -p tsconfig.build.json
 RUN cd packages/company && bunx tsup src/index.ts --format cjs,esm
+RUN cd packages/email && bunx tsup index.ts --format cjs,esm --dts
+RUN cd packages/integration-platform && bunx tsc
 
 # Build the NestJS API
 RUN cd apps/api && bunx nest build
