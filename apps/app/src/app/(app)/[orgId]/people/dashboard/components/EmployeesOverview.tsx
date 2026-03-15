@@ -1,3 +1,4 @@
+import { filterComplianceMembers } from '@/lib/compliance';
 import { trainingVideos as trainingVideosData } from '@/lib/data/training-videos';
 import { auth } from '@/utils/auth';
 import type { Member, Organization, Policy, User } from '@db';
@@ -47,16 +48,14 @@ export async function EmployeesOverview() {
       where: {
         organizationId: organizationId,
         deactivated: false,
+        isActive: true,
       },
       include: {
         user: true,
       },
     });
 
-    employees = fetchedMembers.filter((member) => {
-      const roles = member.role.includes(',') ? member.role.split(',') : [member.role];
-      return roles.includes('employee') || roles.includes('contractor');
-    });
+    employees = await filterComplianceMembers(fetchedMembers, organizationId);
 
     // Fetch required policies that are published and not archived
     policies = await db.policy.findMany({

@@ -42,6 +42,7 @@ model Organization {
   trust                              Trust[]
   context                            Context[]
   secrets                            Secret[]
+  securityPenetrationTestRuns        SecurityPenetrationTestRun[]
   trustAccessRequests                TrustAccessRequest[]
   trustNdaAgreements                 TrustNDAAgreement[]
   trustDocuments                     TrustDocument[]
@@ -58,6 +59,10 @@ model Organization {
   integrationConnections IntegrationConnection[]
   integrationOAuthApps   IntegrationOAuthApp[]
 
+  // Pentest Subscription
+  pentestSubscription PentestSubscription?
+  billing             OrganizationBilling?
+
   // Browser Automation
   browserbaseContext BrowserbaseContext?
   fleetPolicyResults FleetPolicyResult[]
@@ -70,6 +75,10 @@ model Organization {
 
   // Org Chart
   organizationChart OrganizationChart?
+
+  // RBAC
+  organizationRoles          OrganizationRole[]
+  roleNotificationSettings   RoleNotificationSetting[]
 
   @@index([slug])
 }

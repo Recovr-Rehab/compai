@@ -2,7 +2,7 @@ import { db } from '@db';
 import { Injectable, Logger } from '@nestjs/common';
 import { TaskStatus } from '@db';
 import { isUserUnsubscribed } from '@trycompai/email';
-import { sendEmail } from '../email/resend';
+import { triggerEmail } from '../email/trigger-email';
 import { TaskBulkStatusChangedEmail } from '../email/templates/task-bulk-status-changed';
 import { TaskBulkAssigneeChangedEmail } from '../email/templates/task-bulk-assignee-changed';
 import { TaskStatusChangedEmail } from '../email/templates/task-status-changed';
@@ -10,6 +10,7 @@ import { TaskAssigneeChangedEmail } from '../email/templates/task-assignee-chang
 import { EvidenceReviewRequestedEmail } from '../email/templates/evidence-review-requested';
 import { EvidenceBulkReviewRequestedEmail } from '../email/templates/evidence-bulk-review-requested';
 import { AutomationFailuresEmail } from '../email/templates/automation-failures';
+import { AutomationBulkFailuresEmail } from '../email/templates/automation-bulk-failures';
 import { NovuService } from '../notifications/novu.service';
 
 const BULK_TASK_WORKFLOW_ID = 'evidence-bulk-updated';
@@ -67,10 +68,13 @@ export class TaskNotifierService {
             where: {
               organizationId,
               deactivated: false,
+              OR: [
+                { user: { isPlatformAdmin: false } },
+                { role: { contains: 'owner' } },
+              ],
             },
             select: {
               id: true,
-              role: true,
               user: {
                 select: {
                   id: true,
@@ -82,15 +86,8 @@ export class TaskNotifierService {
           }),
         ]);
 
-      // Filter for admins/owners (roles can be comma-separated, e.g., "admin,auditor")
-      const adminMembers = allMembers.filter(
-        (member) =>
-          member.role &&
-          (member.role.includes('admin') || member.role.includes('owner')),
-      );
-
       this.logger.debug(
-        `[notifyBulkStatusChange] Found ${allMembers.length} total members, ${adminMembers.length} admins/owners for organization ${organizationId}`,
+        `[notifyBulkStatusChange] Found ${allMembers.length} total members for organization ${organizationId}`,
       );
 
       const organizationName = organization?.name ?? 'your organization';
@@ -99,31 +96,11 @@ export class TaskNotifierService {
         changedByUser?.email?.trim() ||
         'Someone';
 
-      // Build recipient list: unique assignees + admins, excluding actor
-      const recipientMap = new Map<
-        string,
-        { id: string; name: string; email: string }
-      >();
+      // Build recipient list: all members excluding actor.
+      // The isUserUnsubscribed check handles role-based filtering via the notification matrix.
+      const recipientMap = new Map<string, { id: string; name: string; email: string }>();
 
-      // Add assignees from affected tasks
-      for (const task of tasks) {
-        if (task.assignee?.user?.id && task.assignee.user.email) {
-          const userId = task.assignee.user.id;
-          if (userId !== changedByUserId) {
-            recipientMap.set(userId, {
-              id: userId,
-              name:
-                task.assignee.user.name?.trim() ||
-                task.assignee.user.email?.trim() ||
-                'User',
-              email: task.assignee.user.email,
-            });
-          }
-        }
-      }
-
-      // Add admin members
-      for (const member of adminMembers) {
+      for (const member of allMembers) {
         if (member.user?.id && member.user.email) {
           const userId = member.user.id;
           if (userId !== changedByUserId) {
@@ -136,10 +113,6 @@ export class TaskNotifierService {
           }
         }
       }
-
-      this.logger.debug(
-        `[notifyBulkStatusChange] Found ${allMembers.length} total members, ${adminMembers.length} admins/owners for organization ${organizationId}`,
-      );
 
       const recipients = Array.from(recipientMap.values());
       const taskCount = tasks.length;
@@ -162,6 +135,7 @@ export class TaskNotifierService {
             db,
             recipient.email,
             'taskAssignments',
+            organizationId,
           );
 
           if (isUnsubscribed) {
@@ -173,7 +147,7 @@ export class TaskNotifierService {
 
           // Send email notification
           try {
-            const { id } = await sendEmail({
+            const { id } = await triggerEmail({
               to: recipient.email,
               subject: `${taskCount} task${taskCount === 1 ? '' : 's'} status changed to ${statusLabel}`,
               react: TaskBulkStatusChangedEmail({
@@ -323,6 +297,7 @@ export class TaskNotifierService {
             db,
             recipient.email,
             'taskAssignments',
+            organizationId,
           );
 
           if (isUnsubscribed) {
@@ -334,7 +309,7 @@ export class TaskNotifierService {
 
           // Send email notification
           try {
-            const { id } = await sendEmail({
+            const { id } = await triggerEmail({
               to: recipient.email,
               subject: `${taskCount} task${taskCount === 1 ? '' : 's'} reassigned to ${newAssigneeName}`,
               react: TaskBulkAssigneeChangedEmail({
@@ -444,10 +419,13 @@ export class TaskNotifierService {
             where: {
               organizationId,
               deactivated: false,
+              OR: [
+                { user: { isPlatformAdmin: false } },
+                { role: { contains: 'owner' } },
+              ],
             },
             select: {
               id: true,
-              role: true,
               user: {
                 select: {
                   id: true,
@@ -460,18 +438,8 @@ export class TaskNotifierService {
         ],
       );
 
-      // Filter for admins/owners (roles can be comma-separated, e.g., "admin,auditor")
-      const adminMembers = allMembers.filter(
-        (member) =>
-          member.role &&
-          (member.role.includes('admin') || member.role.includes('owner')),
-      );
-
       this.logger.debug(
-        `[notifyStatusChange] Found ${allMembers.length} total members, ${adminMembers.length} admins/owners for organization ${organizationId}`,
-      );
-      this.logger.debug(
-        `[notifyStatusChange] Task assignee: ${task?.assignee ? 'exists' : 'none'}, assignee user: ${task?.assignee?.user?.id || 'none'}`,
+        `[notifyStatusChange] Found ${allMembers.length} total members for organization ${organizationId}`,
       );
 
       const organizationName = organization?.name ?? 'your organization';
@@ -482,29 +450,11 @@ export class TaskNotifierService {
       const oldStatusLabel = oldStatus.replace('_', ' ');
       const newStatusLabel = newStatus.replace('_', ' ');
 
-      // Build recipient list: assignee + admins, excluding actor
-      const recipientMap = new Map<
-        string,
-        { id: string; name: string; email: string }
-      >();
+      // Build recipient list: all members excluding actor.
+      // The isUserUnsubscribed check handles role-based filtering via the notification matrix.
+      const recipientMap = new Map<string, { id: string; name: string; email: string }>();
 
-      // Add assignee if exists
-      if (task?.assignee?.user?.id && task.assignee.user.email) {
-        const userId = task.assignee.user.id;
-        if (userId !== changedByUserId) {
-          recipientMap.set(userId, {
-            id: userId,
-            name:
-              task.assignee.user.name?.trim() ||
-              task.assignee.user.email?.trim() ||
-              'User',
-            email: task.assignee.user.email,
-          });
-        }
-      }
-
-      // Add admin members
-      for (const member of adminMembers) {
+      for (const member of allMembers) {
         if (member.user?.id && member.user.email) {
           const userId = member.user.id;
           if (userId !== changedByUserId) {
@@ -537,6 +487,7 @@ export class TaskNotifierService {
             db,
             recipient.email,
             'taskAssignments',
+            organizationId,
           );
 
           if (isUnsubscribed) {
@@ -548,7 +499,7 @@ export class TaskNotifierService {
 
           // Send email notification
           try {
-            const { id } = await sendEmail({
+            const { id } = await triggerEmail({
               to: recipient.email,
               subject: `Task "${taskTitle}" status changed to ${newStatusLabel}`,
               react: TaskStatusChangedEmail({
@@ -720,6 +671,7 @@ export class TaskNotifierService {
             db,
             recipient.email,
             'taskAssignments',
+            organizationId,
           );
 
           if (isUnsubscribed) {
@@ -731,7 +683,7 @@ export class TaskNotifierService {
 
           // Send email notification
           try {
-            const { id } = await sendEmail({
+            const { id } = await triggerEmail({
               to: recipient.email,
               subject: `Task "${taskTitle}" reassigned to ${newAssigneeName}`,
               react: TaskAssigneeChangedEmail({
@@ -881,7 +833,7 @@ export class TaskNotifierService {
 
       // Send email notification
       try {
-        const { id } = await sendEmail({
+        const { id } = await triggerEmail({
           to: recipient.email,
           subject: `Evidence review requested: "${taskTitle}"`,
           react: EvidenceReviewRequestedEmail({
@@ -1042,7 +994,7 @@ export class TaskNotifierService {
 
       // Send email notification
       try {
-        const { id } = await sendEmail({
+        const { id } = await triggerEmail({
           to: recipient.email,
           subject: `${taskCount} ${taskText} submitted for your review`,
           react: EvidenceBulkReviewRequestedEmail({
@@ -1143,6 +1095,10 @@ export class TaskNotifierService {
           where: {
             organizationId,
             deactivated: false,
+            OR: [
+              { user: { isPlatformAdmin: false } },
+              { role: { contains: 'owner' } },
+            ],
           },
           select: {
             id: true,
@@ -1234,7 +1190,7 @@ export class TaskNotifierService {
 
           // Send email notification
           try {
-            const { id } = await sendEmail({
+            const { id } = await triggerEmail({
               to: recipient.email,
               subject: `Automation failures on task "${taskTitle}"`,
               react: AutomationFailuresEmail({
@@ -1293,6 +1249,218 @@ export class TaskNotifierService {
     } catch (error) {
       this.logger.error(
         'Failed to send automation failure notifications',
+        error as Error,
+      );
+    }
+  }
+
+  async notifyBulkAutomationFailures(params: {
+    organizationId: string;
+    tasks: Array<{
+      taskId: string;
+      taskTitle: string;
+      failedCount: number;
+      totalCount: number;
+    }>;
+  }): Promise<void> {
+    const { organizationId, tasks: failedTasks } = params;
+
+    if (failedTasks.length === 0) {
+      this.logger.log('[notifyBulkAutomationFailures] No failed tasks, skipping');
+      return;
+    }
+
+    try {
+      const taskIds = failedTasks.map((t) => t.taskId);
+
+      const [organization, tasks, allMembers] = await Promise.all([
+        db.organization.findUnique({
+          where: { id: organizationId },
+          select: { name: true },
+        }),
+        db.task.findMany({
+          where: {
+            id: { in: taskIds },
+            organizationId,
+          },
+          select: {
+            id: true,
+            assignee: {
+              select: {
+                user: {
+                  select: {
+                    id: true,
+                    name: true,
+                    email: true,
+                  },
+                },
+              },
+            },
+          },
+        }),
+        db.member.findMany({
+          where: {
+            organizationId,
+            deactivated: false,
+            OR: [
+              { user: { isPlatformAdmin: false } },
+              { role: { contains: 'owner' } },
+            ],
+          },
+          select: {
+            id: true,
+            role: true,
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+              },
+            },
+          },
+        }),
+      ]);
+
+      // Filter for admins/owners (roles can be comma-separated, e.g., "admin,auditor")
+      const adminMembers = allMembers.filter(
+        (member) =>
+          member.role &&
+          (member.role.includes('admin') || member.role.includes('owner')),
+      );
+
+      this.logger.debug(
+        `[notifyBulkAutomationFailures] Found ${allMembers.length} total members, ${adminMembers.length} admins/owners for organization ${organizationId}`,
+      );
+
+      const organizationName = organization?.name ?? 'your organization';
+
+      // Build recipient list: union of all failed-task assignees + admins/owners (no actor to exclude)
+      const recipientMap = new Map<
+        string,
+        { id: string; name: string; email: string }
+      >();
+
+      // Add assignees from affected tasks
+      for (const task of tasks) {
+        if (task.assignee?.user?.id && task.assignee.user.email) {
+          const userId = task.assignee.user.id;
+          recipientMap.set(userId, {
+            id: userId,
+            name:
+              task.assignee.user.name?.trim() ||
+              task.assignee.user.email?.trim() ||
+              'User',
+            email: task.assignee.user.email,
+          });
+        }
+      }
+
+      // Add admin members
+      for (const member of adminMembers) {
+        if (member.user?.id && member.user.email) {
+          const userId = member.user.id;
+          recipientMap.set(userId, {
+            id: userId,
+            name:
+              member.user.name?.trim() || member.user.email?.trim() || 'User',
+            email: member.user.email,
+          });
+        }
+      }
+
+      const recipients = Array.from(recipientMap.values());
+      const taskCount = failedTasks.length;
+      const taskText = taskCount === 1 ? 'task' : 'tasks';
+
+      const appUrl =
+        process.env.NEXT_PUBLIC_APP_URL ??
+        process.env.BETTER_AUTH_URL ??
+        'https://app.trycomp.ai';
+      const tasksUrl = `${appUrl}/${organizationId}/tasks`;
+
+      // Build task items for the email template
+      const taskItems = failedTasks.map((ft) => ({
+        title: ft.taskTitle,
+        url: `${appUrl}/${organizationId}/tasks/${ft.taskId}`,
+        failedCount: ft.failedCount,
+        totalCount: ft.totalCount,
+      }));
+
+      this.logger.log(
+        `Sending bulk automation failure notifications to ${recipients.length} recipients for ${taskCount} ${taskText}`,
+      );
+
+      // Send notifications to each recipient
+      await Promise.allSettled(
+        recipients.map(async (recipient) => {
+          const isUnsubscribed = await isUserUnsubscribed(
+            db,
+            recipient.email,
+            'taskAssignments',
+          );
+
+          if (isUnsubscribed) {
+            this.logger.log(
+              `Skipping notification: user ${recipient.email} is unsubscribed from task assignments`,
+            );
+            return;
+          }
+
+          // Send email notification
+          try {
+            const { id } = await triggerEmail({
+              to: recipient.email,
+              subject: `${taskCount} ${taskText} with automation failures`,
+              react: AutomationBulkFailuresEmail({
+                toName: recipient.name,
+                toEmail: recipient.email,
+                organizationName,
+                tasksUrl,
+                tasks: taskItems,
+              }),
+              system: true,
+            });
+
+            this.logger.log(
+              `Bulk automation failure email sent to ${recipient.email} (ID: ${id})`,
+            );
+          } catch (error) {
+            this.logger.error(
+              `Failed to send bulk automation failure email to ${recipient.email}:`,
+              error instanceof Error ? error.message : 'Unknown error',
+            );
+          }
+
+          // Send in-app notification
+          try {
+            const title = `${taskCount} ${taskText} with automation failures`;
+            const message = `Today's scheduled automations found failures in ${taskCount} ${taskText} in ${organizationName}`;
+
+            await this.novuService.trigger({
+              workflowId: BULK_TASK_WORKFLOW_ID,
+              subscriberId: `${recipient.id}-${organizationId}`,
+              email: recipient.email,
+              payload: {
+                title,
+                message,
+                url: tasksUrl,
+              },
+            });
+
+            this.logger.log(
+              `[NOVU] Bulk automation failure in-app notification sent to ${recipient.id}`,
+            );
+          } catch (error) {
+            this.logger.error(
+              `[NOVU] Failed to send bulk automation failure in-app notification to ${recipient.id}:`,
+              error instanceof Error ? error.message : 'Unknown error',
+            );
+          }
+        }),
+      );
+    } catch (error) {
+      this.logger.error(
+        'Failed to send bulk automation failure notifications',
         error as Error,
       );
     }

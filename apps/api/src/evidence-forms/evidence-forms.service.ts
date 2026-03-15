@@ -46,6 +46,7 @@ const reviewSchema = z.object({
 });
 
 const EVIDENCE_FORM_REVIEWER_ROLES = ['owner', 'admin', 'auditor'] as const;
+const EVIDENCE_FORM_DELETE_ROLES = ['owner', 'admin'] as const;
 const MAX_UPLOAD_FILE_SIZE_BYTES = 100 * 1024 * 1024;
 const MAX_UPLOAD_BASE64_LENGTH = Math.ceil(MAX_UPLOAD_FILE_SIZE_BYTES / 3) * 4;
 
@@ -159,6 +160,20 @@ export class EvidenceFormsService {
     return userId;
   }
 
+  private requireEvidenceDeleteAccess(authContext: AuthContext): string {
+    const userId = this.requireJwtUser(authContext);
+    const roles = authContext.userRoles ?? [];
+    const canDelete = EVIDENCE_FORM_DELETE_ROLES.some((role) => roles.includes(role));
+
+    if (!canDelete) {
+      throw new UnauthorizedException(
+        `Delete denied. Required one of roles: ${EVIDENCE_FORM_DELETE_ROLES.join(', ')}`,
+      );
+    }
+
+    return userId;
+  }
+
   private decodeBase64File(fileData: string): Buffer {
     const normalized = fileData.trim();
     if (normalized.length === 0 || normalized.length % 4 !== 0) {
@@ -180,6 +195,34 @@ export class EvidenceFormsService {
     }
 
     return fileBuffer;
+  }
+
+  /**
+   * Walk submission data and regenerate fresh presigned URLs for any file fields.
+   * File fields are objects with { fileKey, downloadUrl, fileName }.
+   */
+  private async refreshFileUrls(
+    data: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const refreshed: Record<string, unknown> = { ...data };
+
+    for (const [key, value] of Object.entries(refreshed)) {
+      if (
+        value &&
+        typeof value === 'object' &&
+        'fileKey' in value &&
+        typeof (value as Record<string, unknown>).fileKey === 'string'
+      ) {
+        const fileObj = value as Record<string, unknown>;
+        const freshUrl =
+          await this.attachmentsService.getPresignedDownloadUrl(
+            fileObj.fileKey as string,
+          );
+        refreshed[key] = { ...fileObj, downloadUrl: freshUrl };
+      }
+    }
+
+    return refreshed;
   }
 
   listForms() {
@@ -261,9 +304,21 @@ export class EvidenceFormsService {
 
     const paginated = filtered.slice(query.offset, query.offset + query.limit);
 
+    const submissionsWithFreshUrls = await Promise.all(
+      paginated.map(async (submission) => {
+        const refreshedData = await this.refreshFileUrls(
+          submission.data as Record<string, unknown>,
+        );
+        return normalizeSubmissionFormType({
+          ...submission,
+          data: refreshedData,
+        });
+      }),
+    );
+
     return {
       form: evidenceFormDefinitions[parsedType.data],
-      submissions: paginated.map(normalizeSubmissionFormType),
+      submissions: submissionsWithFreshUrls,
       total: filtered.length,
     };
   }
@@ -309,10 +364,49 @@ export class EvidenceFormsService {
       throw new NotFoundException('Submission not found');
     }
 
+    const refreshedData = await this.refreshFileUrls(
+      submission.data as Record<string, unknown>,
+    );
+
     return {
       form: evidenceFormDefinitions[parsedType.data],
-      submission: normalizeSubmissionFormType(submission),
+      submission: normalizeSubmissionFormType({
+        ...submission,
+        data: refreshedData,
+      }),
     };
+  }
+
+  async deleteSubmission(params: {
+    organizationId: string;
+    authContext: AuthContext;
+    formType: string;
+    submissionId: string;
+  }) {
+    this.requireEvidenceDeleteAccess(params.authContext);
+
+    const parsedType = evidenceFormTypeSchema.safeParse(params.formType);
+    if (!parsedType.success) {
+      throw new BadRequestException('Unsupported form type');
+    }
+
+    const submission = await db.evidenceSubmission.findFirst({
+      where: {
+        id: params.submissionId,
+        organizationId: params.organizationId,
+        formType: toDbEvidenceFormType(parsedType.data),
+      },
+    });
+
+    if (!submission) {
+      throw new NotFoundException('Submission not found');
+    }
+
+    await db.evidenceSubmission.delete({
+      where: { id: params.submissionId },
+    });
+
+    return { success: true, id: params.submissionId };
   }
 
   async submitForm(params: {
