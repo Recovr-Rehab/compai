@@ -1,5 +1,5 @@
 import { MagicLinkEmail, OTPVerificationEmail } from '@trycompai/email';
-import { triggerEmail } from '../email/trigger-email';
+import { sendEmail } from '../email/resend';
 import { InviteEmail } from '../email/templates/invite-member';
 import { db } from '@trycompai/db';
 import { betterAuth } from 'better-auth';
@@ -236,7 +236,7 @@ export const auth = betterAuth({
           process.env.BETTER_AUTH_URL ??
           'https://app.trycomp.ai';
         const inviteLink = `${appUrl}/invite/${data.invitation.id}`;
-        await triggerEmail({
+        await sendEmail({
           to: data.email,
           subject: `You've been invited to join ${data.organization.name} on Comp AI`,
           react: InviteEmail({
@@ -281,7 +281,7 @@ export const auth = betterAuth({
           console.log('[Auth] Sending magic link to:', email);
           console.log('[Auth] Magic link URL:', url);
         }
-        await triggerEmail({
+        await sendEmail({
           to: email,
           subject: 'Login to Comp AI',
           react: MagicLinkEmail({ email, url }),
@@ -295,7 +295,7 @@ export const auth = betterAuth({
         if (process.env.NODE_ENV === 'development') {
           console.log('[Auth] Sending OTP to:', email);
         }
-        await triggerEmail({
+        await sendEmail({
           to: email,
           subject: 'One-Time Password for Comp AI',
           react: OTPVerificationEmail({ email, otp }),
